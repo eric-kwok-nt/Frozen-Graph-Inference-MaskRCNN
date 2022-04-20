@@ -267,8 +267,8 @@ class GraphInference:
 
 if __name__ == "__main__":
     graph_path = "./model/frozen_graph.pb"
-    video_path = "../data/videos/multiple_people.mp4"
-    directory, filename = os.path.split("../data/videos/multiple_people.mp4")
+    video_path = "../data/videos/single_person.mp4"
+    directory, filename = os.path.split(video_path)
     filename_wo_ext, ext = os.path.splitext(filename)
     filename_to_save = filename_wo_ext + "_infer" + ext
     save_dir = "inferenced_videos/"
