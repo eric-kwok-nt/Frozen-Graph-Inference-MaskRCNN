@@ -119,6 +119,7 @@ class GraphInference:
     def __init__(self, graph_path):
         self.graph_path = graph_path
         self.inference_time = 0
+        t1_setup = time.time()
         self.coco_config = InferenceConfig()
         self.coco_config.display()
 
@@ -128,6 +129,8 @@ class GraphInference:
         # Create frozen function
         self.frozen_func = None
         self._build_graph()
+        t2_setup = time.time()
+        print(f"Model setup time: {t2_setup - t1_setup:.3f}")
 
     def _wrap_frozen_graph(self, graph_def, inputs, outputs, print_graph=False):
         def _imports_graph_def():
@@ -277,5 +280,5 @@ if __name__ == "__main__":
     save_video_path = os.path.join(save_dir, filename_to_save)
     InferObj = GraphInference(graph_path=graph_path)
     InferObj.video_inference(
-        video_path, save_video=True, save_video_path=save_video_path
+        video_path, save_video=False, save_video_path=save_video_path
     )
