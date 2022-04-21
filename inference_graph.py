@@ -1,6 +1,6 @@
 import tensorflow as tf
 import os
-import time
+from time import perf_counter_ns
 import numpy as np
 from saved_model_preprocess import ForwardModel
 import cv2
@@ -119,7 +119,7 @@ class GraphInference:
     def __init__(self, graph_path):
         self.graph_path = graph_path
         self.inference_time = 0
-        t1_setup = time.time()
+        t1_setup = perf_counter_ns()
         self.coco_config = InferenceConfig()
         self.coco_config.display()
 
@@ -129,8 +129,8 @@ class GraphInference:
         # Create frozen function
         self.frozen_func = None
         self._build_graph()
-        t2_setup = time.time()
-        print(f"Model setup time: {t2_setup - t1_setup:.3f}")
+        t2_setup = perf_counter_ns()
+        print(f"Model setup time: {(t2_setup - t1_setup)*1e-9:.3f}s")
 
     def _wrap_frozen_graph(self, graph_def, inputs, outputs, print_graph=False):
         def _imports_graph_def():
@@ -194,10 +194,10 @@ class GraphInference:
                 if not ret:
                     print("Can't receive frame...")
                     break
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                result_dict = self.inference(frame_rgb)
+
+                result_dict = self.inference(frame)
                 infer_image = visualize.display_instances(
-                    frame_rgb,
+                    frame,
                     result_dict["rois"],
                     result_dict["mask"],
                     result_dict["class"],
@@ -205,6 +205,7 @@ class GraphInference:
                     result_dict["scores"],
                     title="Predictions",
                 )
+
                 if save_video:
                     if not videowriter_initialize:
                         videowriter_initialize = True
@@ -223,8 +224,8 @@ class GraphInference:
             print("Video saved successfully")
         cap.release()
         print("****************      INFERENCE DONE      *************")
-        print(f"  TOTAL INFERENCE TIME : {self.inference_time:.3f}s")
-        print(f"  FPS: {total_frames/self.inference_time:.2f}")
+        print(f"  TOTAL INFERENCE TIME : {self.inference_time*1e-9:.3f}s")
+        print(f"  FPS: {total_frames/(self.inference_time*1e-9):.2f}")
 
     def inference(self, frame):
         (
@@ -235,13 +236,13 @@ class GraphInference:
             windows,
         ) = self._preprocess_image(frame)
         result = dict()
-        t1 = time.time()
+        t1 = perf_counter_ns()
 
         output = self.frozen_func(molded_images, image_metas, anchors)
         result["mrcnn_detection/Reshape_1"] = output[0].numpy()
         result["mrcnn_mask/Reshape_1"] = output[1].numpy()
 
-        t2 = time.time()
+        t2 = perf_counter_ns()
         self.inference_time += t2 - t1
 
         result_dict = self.preprocess_obj.result_to_dict(
@@ -270,7 +271,7 @@ class GraphInference:
 
 if __name__ == "__main__":
     graph_path = "./model/frozen_graph.pb"
-    video_path = "../data/videos/single_person.mp4"
+    video_path = "../data/videos/multiple_people.mp4"
     directory, filename = os.path.split(video_path)
     filename_wo_ext, ext = os.path.splitext(filename)
     filename_to_save = filename_wo_ext + "_infer" + ext

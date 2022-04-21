@@ -6,7 +6,7 @@ from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
 from torchvision.ops import nms
 from tqdm import tqdm
 import cv2
-import time
+from time import perf_counter_ns
 import numpy as np
 import pdb
 
@@ -14,11 +14,11 @@ import pdb
 class MaskRCNN_R50:
     def __init__(self, score_threshold=0.5, proba_threshold=0.5, nms_iou_threshold=0.5):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        t1_setup = time.time()
+        t1_setup = perf_counter_ns()
         self.model = maskrcnn_resnet50_fpn(pretrained=True)
         self.model.eval().to(self.device)
-        t2_setup = time.time()
-        print(f"Model setup time: {t2_setup - t1_setup:.3f}")
+        t2_setup = perf_counter_ns()
+        print(f"Model setup time: {(t2_setup - t1_setup)*1e-9:.3f}")
         self.transform_pre = T.Compose(
             [
                 T.ToTensor(),
@@ -51,7 +51,7 @@ class MaskRCNN_R50:
                     frame_rgb_norm = frame_rgb_orig / 255
                     frame_height, frame_width, _ = frame_rgb_orig.shape
                     frame_rgb = [self.transform_pre(frame_rgb_norm).to(self.device)]
-                    t1 = time.time()
+                    t1 = perf_counter_ns()
                     predictions = self.model(frame_rgb)
                     out_indices = nms(
                         predictions[0]["boxes"],
@@ -68,7 +68,7 @@ class MaskRCNN_R50:
                         boxes = boxes[
                             predictions[0]["scores"][out_indices] > self.score_threshold
                         ]
-                        t2 = time.time()
+                        t2 = perf_counter_ns()
                         img_out = draw_segmentation_masks(
                             self.transform_post(frame_rgb_orig), masks, alpha=0.7
                         )
@@ -85,7 +85,7 @@ class MaskRCNN_R50:
                                     (frame_height, frame_width), save_video_path, fps=30
                                 )
                     else:
-                        t2 = time.time()
+                        t2 = perf_counter_ns()
                         img_out = cv2.cvtColor(frame_rgb_orig, cv2.COLOR_RGB2BGR)
                     self.inference_time += t2 - t1
                     if save_video:
@@ -98,8 +98,8 @@ class MaskRCNN_R50:
                     print("Video saved successfully")
                 cap.release()
                 print("****************      INFERENCE DONE      *************")
-                print(f"  TOTAL INFERENCE TIME : {self.inference_time:.3f}s")
-                print(f"  FPS: {total_frames/self.inference_time:.2f}")
+                print(f"  TOTAL INFERENCE TIME : {self.inference_time*1e-9:.3f}s")
+                print(f"  FPS: {total_frames/(self.inference_time*1e-9):.2f}")
 
     def save_video(self, frame_size: tuple, save_path: str, fps=30):
         height, width = frame_size
