@@ -8,6 +8,7 @@ from tqdm import tqdm
 import cv2
 from time import perf_counter_ns
 import numpy as np
+from coco_classes import class_dict
 import pdb
 
 
@@ -15,7 +16,11 @@ class MaskRCNN_R50:
     def __init__(self, score_threshold=0.5, proba_threshold=0.5, nms_iou_threshold=0.5):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         t1_setup = perf_counter_ns()
-        self.model = maskrcnn_resnet50_fpn(pretrained=True)
+        self.model = maskrcnn_resnet50_fpn(
+            pretrained=True,
+            box_nms_thresh=nms_iou_threshold,
+            box_score_thresh=score_threshold,
+        )
         self.model.eval().to(self.device)
         t2_setup = perf_counter_ns()
         print(f"Model setup time: {(t2_setup - t1_setup)*1e-9:.3f}")
@@ -31,9 +36,7 @@ class MaskRCNN_R50:
                 T.ConvertImageDtype(torch.uint8),
             ]
         )
-        self.score_threshold = score_threshold  # Score threshold to filter bboxes
         self.proba_threshold = proba_threshold  # probability threshold for converting masks to binary masks
-        self.nms_iou_threshold = nms_iou_threshold
         self.inference_time = 0
 
     def video_inference(self, video_path: str, save_video=True, save_video_path=None):
@@ -53,26 +56,20 @@ class MaskRCNN_R50:
                     frame_rgb = [self.transform_pre(frame_rgb_norm).to(self.device)]
                     t1 = perf_counter_ns()
                     predictions = self.model(frame_rgb)
-                    out_indices = nms(
-                        predictions[0]["boxes"],
-                        predictions[0]["scores"],
-                        self.nms_iou_threshold,
-                    )
-                    masks = predictions[0]["masks"][out_indices][
-                        predictions[0]["scores"][out_indices] > self.score_threshold
-                    ]
                     if len(predictions[0]["masks"]) > 0:
-                        masks = masks > self.proba_threshold
+                        masks = predictions[0]["masks"] > self.proba_threshold
                         masks = masks.squeeze(1)
-                        boxes = predictions[0]["boxes"][out_indices]
-                        boxes = boxes[
-                            predictions[0]["scores"][out_indices] > self.score_threshold
+                        boxes = predictions[0]["boxes"]
+                        labels = [
+                            class_dict[label.item()]
+                            for label in predictions[0]["labels"]
                         ]
+
                         t2 = perf_counter_ns()
                         img_out = draw_segmentation_masks(
                             self.transform_post(frame_rgb_orig), masks, alpha=0.7
                         )
-                        img_out = draw_bounding_boxes(img_out, boxes)
+                        img_out = draw_bounding_boxes(img_out, boxes, labels=labels)
                         img_out = np.moveaxis(img_out.numpy(), 0, -1)
                         img_out = cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR)
                         if save_video:
@@ -108,7 +105,7 @@ class MaskRCNN_R50:
 
 
 if __name__ == "__main__":
-    video_path = "../data/videos/multiple_people.mp4"
+    video_path = "../data/videos/single_person.mp4"
     directory, filename = os.path.split(video_path)
     filename_wo_ext, ext = os.path.splitext(filename)
     filename_to_save = filename_wo_ext + "_infer_r50" + ext
@@ -118,5 +115,5 @@ if __name__ == "__main__":
     save_video_path = os.path.join(save_dir, filename_to_save)
     MRCNN50 = MaskRCNN_R50()
     MRCNN50.video_inference(
-        video_path, save_video=False, save_video_path=save_video_path
+        video_path, save_video=True, save_video_path=save_video_path
     )
