@@ -3,13 +3,12 @@ import torch
 from torchvision.models.detection import maskrcnn_resnet50_fpn
 import torchvision.transforms as T
 from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
-from torchvision.ops import nms
 from tqdm import tqdm
 import cv2
 from time import perf_counter_ns
 import numpy as np
 from coco_classes import class_dict
-import pdb
+import pickle
 
 
 class MaskRCNN_R50:
@@ -39,7 +38,40 @@ class MaskRCNN_R50:
         self.proba_threshold = proba_threshold  # probability threshold for converting masks to binary masks
         self.inference_time = 0
 
-    def video_inference(self, video_path: str, save_video=True, save_video_path=None):
+    def image_inference(
+        self,
+        image_path: str,
+        draw_bbox=False,
+        save_image=True,
+        save_image_path=None,
+        save_outputs=True,
+        output_path=None,
+    ):
+        img = cv2.imread(image_path)
+        with torch.no_grad():
+            img_rgb, img_rgb_orig = self.preprocess(img)
+            predictions = self.model(img_rgb)
+            if len(predictions[0]["masks"]) > 0:
+                masks, boxes, labels = self.process_predictions(predictions)
+                img_out = self.visualization(
+                    img_rgb_orig, masks, boxes, labels, draw_bbox, alpha=0.7
+                )
+
+                if save_image:
+                    self.save_image(
+                        img_out,
+                        save_image_path,
+                        save_outputs,
+                        output_path,
+                        masks,
+                        boxes,
+                        labels,
+                        predictions[0]["scores"],
+                    )
+
+    def video_inference(
+        self, video_path: str, draw_bbox=False, save_video=True, save_video_path=None
+    ):
         cap = cv2.VideoCapture(video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         videowriter_initialize = False
@@ -50,28 +82,17 @@ class MaskRCNN_R50:
                     if not ret:
                         print("Can't receive frame...")
                         break
-                    frame_rgb_orig = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    frame_rgb_norm = frame_rgb_orig / 255
-                    frame_height, frame_width, _ = frame_rgb_orig.shape
-                    frame_rgb = [self.transform_pre(frame_rgb_norm).to(self.device)]
+                    frame_height, frame_width, _ = frame.shape
+                    frame_rgb, frame_rgb_orig = self.preprocess(frame)
                     t1 = perf_counter_ns()
                     predictions = self.model(frame_rgb)
                     if len(predictions[0]["masks"]) > 0:
-                        masks = predictions[0]["masks"] > self.proba_threshold
-                        masks = masks.squeeze(1)
-                        boxes = predictions[0]["boxes"]
-                        labels = [
-                            class_dict[label.item()]
-                            for label in predictions[0]["labels"]
-                        ]
+                        masks, boxes, labels = self.process_predictions(predictions)
 
                         t2 = perf_counter_ns()
-                        img_out = draw_segmentation_masks(
-                            self.transform_post(frame_rgb_orig), masks, alpha=0.7
+                        img_out = self.visualization(
+                            frame_rgb_orig, masks, boxes, labels, draw_bbox, alpha=0.7
                         )
-                        img_out = draw_bounding_boxes(img_out, boxes, labels=labels)
-                        img_out = np.moveaxis(img_out.numpy(), 0, -1)
-                        img_out = cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR)
                         if save_video:
                             if not videowriter_initialize:
                                 videowriter_initialize = True
@@ -98,22 +119,87 @@ class MaskRCNN_R50:
                 print(f"  TOTAL INFERENCE TIME : {self.inference_time*1e-9:.3f}s")
                 print(f"  FPS: {total_frames/(self.inference_time*1e-9):.2f}")
 
+    def visualization(
+        self, img_rgb_orig, masks, boxes, labels, draw_bbox=False, alpha=0.7
+    ):
+        img_out = draw_segmentation_masks(
+            self.transform_post(img_rgb_orig), masks, alpha=alpha
+        )
+        if draw_bbox:
+            img_out = draw_bounding_boxes(
+                img_out, boxes, labels=labels, colors=(0, 0, 255)
+            )
+        img_out = np.moveaxis(img_out.numpy(), 0, -1)
+        return cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR)
+
+    def preprocess(self, img):
+        img_rgb_orig = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img_rgb_norm = img_rgb_orig / 255
+        return [self.transform_pre(img_rgb_norm).to(self.device)], img_rgb_orig
+
+    def process_predictions(self, predictions):
+        masks = predictions[0]["masks"] > self.proba_threshold
+        masks = masks.squeeze(1)
+        boxes = predictions[0]["boxes"]
+        labels = [class_dict[label.item()] for label in predictions[0]["labels"]]
+        return masks, boxes, labels
+
     def save_video(self, frame_size: tuple, save_path: str, fps=30):
         height, width = frame_size
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         return cv2.VideoWriter(save_path, fourcc, fps, (width, height))
 
+    def save_image(
+        self,
+        img,
+        save_path,
+        save_outputs=False,
+        output_path=None,
+        masks=None,
+        boxes=None,
+        labels=None,
+        scores=None,
+    ):
+        cv2.imwrite(save_path, img)
+        if save_outputs:
+            rows, cols, _ = img.shape
+            boxes_np = boxes.cpu().numpy()
+            boxes_np[:, [0, 2]] /= cols
+            boxes_np[:, [1, 3]] /= rows
+            outputs = {
+                "masks": masks.cpu().numpy(),
+                "bboxes": boxes_np,
+                "bbox_labels": np.array(labels),
+                "bbox_scores": scores.cpu().numpy(),
+            }
+            directory, _ = os.path.split(output_path)
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+            with open(output_path, "wb") as fh:
+                pickle.dump(outputs, fh, pickle.HIGHEST_PROTOCOL)
+
 
 if __name__ == "__main__":
-    video_path = "../data/videos/single_person.mp4"
-    directory, filename = os.path.split(video_path)
+    input_path = "../data/videos/single_person.mp4"
+    # input_path = "../data/images/2-persons-white-bg.jpg"
+    directory, filename = os.path.split(input_path)
     filename_wo_ext, ext = os.path.splitext(filename)
     filename_to_save = filename_wo_ext + "_infer_r50" + ext
     save_dir = "inferenced_videos/"
+    # save_dir = "inferenced_images/"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    save_video_path = os.path.join(save_dir, filename_to_save)
+    save_visual_path = os.path.join(save_dir, filename_to_save)
     MRCNN50 = MaskRCNN_R50()
     MRCNN50.video_inference(
-        video_path, save_video=True, save_video_path=save_video_path
+        input_path, draw_bbox=True, save_video=True, save_video_path=save_visual_path
     )
+    # save_output_path = "outputs/outputs.pkl"
+    # MRCNN50.image_inference(
+    #     input_path,
+    #     draw_bbox=True,
+    #     save_image=True,
+    #     save_image_path=save_visual_path,
+    #     save_outputs=True,
+    #     output_path=save_output_path,
+    # )
